@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"git.sr.ht/~rockorager/go-jmap"
+	"git.sr.ht/~rockorager/go-jmap/mail"
 	"git.sr.ht/~rockorager/go-jmap/mail/email"
 	"git.sr.ht/~rockorager/go-jmap/mail/thread"
 	"github.com/stretchr/testify/assert"
@@ -188,6 +191,82 @@ func TestGetThreadID_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "email not found")
 }
 
+func TestWriteThread(t *testing.T) {
+	now := time.Now()
+	emails := []*email.Email{
+		{
+			ID:         "email-1",
+			From:       []*mail.Address{{Name: "Alice", Email: "alice@example.com"}},
+			To:         []*mail.Address{{Email: "bob@example.com"}},
+			Subject:    "Original",
+			ReceivedAt: &now,
+			TextBody:   []*email.BodyPart{{PartID: "1"}},
+			BodyValues: map[string]*email.BodyValue{
+				"1": {Value: "Hello Bob"},
+			},
+		},
+		{
+			ID:         "email-2",
+			From:       []*mail.Address{{Email: "bob@example.com"}},
+			To:         []*mail.Address{{Email: "alice@example.com"}},
+			CC:         []*mail.Address{{Email: "carol@example.com"}},
+			Subject:    "Re: Original",
+			ReceivedAt: &now,
+			TextBody:   []*email.BodyPart{{PartID: "1"}},
+			BodyValues: map[string]*email.BodyValue{
+				"1": {Value: "Hi Alice!\n"},
+			},
+			Attachments: []*email.BodyPart{
+				{Name: "doc.pdf", Type: "application/pdf", Size: 1234},
+				{Type: "image/png", Size: 5678}, // unnamed
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := writeThread(&buf, emails)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "alice@example.com")
+	assert.Contains(t, out, "bob@example.com")
+	assert.Contains(t, out, "Original")
+	assert.Contains(t, out, "Re: Original")
+	assert.Contains(t, out, "Hello Bob")
+	assert.Contains(t, out, "Hi Alice!")
+	assert.Contains(t, out, "carol@example.com")
+	assert.Contains(t, out, "doc.pdf")
+	assert.Contains(t, out, "(unnamed)")
+}
+
+func TestWriteThread_EmptyList(t *testing.T) {
+	var buf bytes.Buffer
+	err := writeThread(&buf, []*email.Email{})
+	require.NoError(t, err)
+	assert.Empty(t, buf.String())
+}
+
+func TestWriteThread_NoDate(t *testing.T) {
+	emails := []*email.Email{
+		{
+			ID:       "email-1",
+			From:     []*mail.Address{{Email: "alice@example.com"}},
+			To:       []*mail.Address{{Email: "bob@example.com"}},
+			Subject:  "No date",
+			TextBody: []*email.BodyPart{{PartID: "1"}},
+			BodyValues: map[string]*email.BodyValue{
+				"1": {Value: "body text"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := writeThread(&buf, emails)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "No date")
+	assert.Contains(t, buf.String(), "body text")
+}
+
 func TestAttachmentDownload(t *testing.T) {
 	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
 		calls := jmaptest.ParseCalls(t, req)
@@ -242,4 +321,156 @@ func TestAttachmentDownload(t *testing.T) {
 	content, err := os.ReadFile(tmpDir + "/document.pdf")
 	require.NoError(t, err)
 	assert.Equal(t, "test-blob-content", string(content))
+}
+
+func TestRunEmailAttachment(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/get" {
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{
+							"id": "email-1",
+							"attachments": []map[string]any{
+								{
+									"partId":     "att1",
+									"blobId":     "blob-att1",
+									"name":       "file.txt",
+									"type":       "text/plain",
+									"size":       100,
+									"disposition": "attachment",
+								},
+							},
+						},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	tmpDir := t.TempDir()
+	oldOutput := attachmentOutput
+	attachmentOutput = tmpDir
+	defer func() { attachmentOutput = oldOutput }()
+
+	err := runEmailAttachment(nil, []string{"email-1"})
+	assert.NoError(t, err)
+
+	// Verify file was created
+	content, err := os.ReadFile(tmpDir + "/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "test-blob-content", string(content))
+}
+
+func TestRunEmailAttachment_SpecificBlob(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/get" {
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{
+							"id": "email-1",
+							"attachments": []map[string]any{
+								{"blobId": "blob-1", "name": "first.txt", "type": "text/plain", "size": 10},
+								{"blobId": "blob-2", "name": "second.txt", "type": "text/plain", "size": 20},
+							},
+						},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	tmpDir := t.TempDir()
+	oldOutput := attachmentOutput
+	attachmentOutput = tmpDir
+	defer func() { attachmentOutput = oldOutput }()
+
+	err := runEmailAttachment(nil, []string{"email-1", "blob-2"})
+	assert.NoError(t, err)
+
+	content, err := os.ReadFile(tmpDir + "/second.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "test-blob-content", string(content))
+}
+
+func TestRunEmailAttachment_NoAttachments(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/get" {
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1"},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	err := runEmailAttachment(nil, []string{"email-1"})
+	assert.NoError(t, err)
+}
+
+func TestRunEmailAttachment_BlobNotFound(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/get" {
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{
+							"id": "email-1",
+							"attachments": []map[string]any{
+								{"blobId": "blob-1", "name": "file.txt"},
+							},
+						},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	err := runEmailAttachment(nil, []string{"email-1", "blob-nonexistent"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestRunEmailAttachment_EmailNotFound(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/get" {
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	err := runEmailAttachment(nil, []string{"nonexistent"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "email not found")
 }

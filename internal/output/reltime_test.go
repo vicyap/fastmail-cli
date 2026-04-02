@@ -7,6 +7,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRelativeTime_Public(t *testing.T) {
+	// Test that RelativeTime (the public function) returns a non-empty string
+	// for a recent time. We can't test the exact value since it depends on
+	// the current time, but we can verify it runs without error.
+	recent := time.Now().Add(-5 * time.Minute)
+	result := RelativeTime(recent)
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, "m ago")
+
+	// Test with a very old date
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	result = RelativeTime(old)
+	assert.NotEmpty(t, result)
+	assert.Equal(t, "2020-01-01", result)
+}
+
 func TestRelativeTime(t *testing.T) {
 	now := time.Date(2026, 4, 2, 15, 30, 0, 0, time.UTC)
 

@@ -50,7 +50,10 @@ func DeleteToken() error {
 }
 
 // New creates a new Client, resolves the token, and authenticates.
-func New(flagToken string) (*Client, error) {
+// It is a variable so tests can replace it with a stub.
+var New = newClient
+
+func newClient(flagToken string) (*Client, error) {
 	token, err := ResolveToken(flagToken)
 	if err != nil {
 		return nil, err

@@ -95,7 +95,10 @@ func Pager(fn func(w io.Writer) error) error {
 	return nil
 }
 
-func isTerminal() bool {
+// isTerminal is a variable to allow test overrides.
+var isTerminal = defaultIsTerminal
+
+func defaultIsTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	if err != nil {
 		return false

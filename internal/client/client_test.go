@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"git.sr.ht/~rockorager/go-jmap"
+	"git.sr.ht/~rockorager/go-jmap/mail"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,4 +29,26 @@ func TestResolveToken_NoTokenReturnsError(t *testing.T) {
 	_, err := ResolveToken("")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no API token found")
+}
+
+func TestClient_MailAccountID(t *testing.T) {
+	jmapClient := &jmap.Client{
+		Session: &jmap.Session{
+			PrimaryAccounts: map[jmap.URI]jmap.ID{
+				mail.URI: "account-123",
+			},
+		},
+	}
+	c := &Client{JMAP: jmapClient}
+	assert.Equal(t, jmap.ID("account-123"), c.MailAccountID())
+}
+
+func TestClient_Username(t *testing.T) {
+	jmapClient := &jmap.Client{
+		Session: &jmap.Session{
+			Username: "user@fastmail.com",
+		},
+	}
+	c := &Client{JMAP: jmapClient}
+	assert.Equal(t, "user@fastmail.com", c.Username())
 }

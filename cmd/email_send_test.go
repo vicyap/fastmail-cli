@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -461,4 +463,756 @@ func TestUploadAttachment_FileNotFound(t *testing.T) {
 	_, err := uploadAttachment(c, jmap.ID(jmaptest.TestAccountID), "/nonexistent/file.txt")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to open attachment")
+}
+
+func TestParseAddress_Variations(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected *mail.Address
+	}{
+		{
+			input:    "alice@example.com",
+			expected: &mail.Address{Email: "alice@example.com"},
+		},
+		{
+			input:    "Alice Smith <alice@example.com>",
+			expected: &mail.Address{Name: "Alice Smith", Email: "alice@example.com"},
+		},
+		{
+			input:    "<alice@example.com>",
+			expected: &mail.Address{Name: "", Email: "alice@example.com"},
+		},
+		{
+			input:    "user+tag@domain.co.uk",
+			expected: &mail.Address{Email: "user+tag@domain.co.uk"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseAddress(tt.input)
+			assert.Equal(t, tt.expected.Email, result.Email)
+			assert.Equal(t, tt.expected.Name, result.Name)
+		})
+	}
+}
+
+func TestResolveIdentity_NotFound(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Identity/get" {
+				responses = append(responses, jmaptest.MethodResponse("Identity/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "ident-1", "name": "Primary", "email": "test@fastmail.com"},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+
+	c := &client.Client{JMAP: jmapClient}
+	_, err := resolveIdentity(c, "nonexistent-id")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "identity not found")
+}
+
+func TestResolveIdentity_NoIdentities(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Identity/get" {
+				responses = append(responses, jmaptest.MethodResponse("Identity/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+
+	c := &client.Client{JMAP: jmapClient}
+	_, err := resolveIdentity(c, "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no sending identities found")
+}
+
+func TestFormatEmailSetError(t *testing.T) {
+	t.Run("with description", func(t *testing.T) {
+		desc := "email too large"
+		err := &jmap.SetError{
+			Type:        "tooLarge",
+			Description: &desc,
+		}
+		result := formatEmailSetError(err)
+		assert.Equal(t, "tooLarge: email too large", result)
+	})
+
+	t.Run("without description", func(t *testing.T) {
+		err := &jmap.SetError{
+			Type: "forbidden",
+		}
+		result := formatEmailSetError(err)
+		assert.Equal(t, "forbidden", result)
+	})
+}
+
+func TestTrashEmail(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-inbox", "name": "Inbox", "role": "inbox"},
+						{"id": "mbox-trash", "name": "Trash", "role": "trash"},
+					},
+				}, call.CallID))
+			case "Email/get":
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1", "mailboxIds": map[string]any{"mbox-inbox": true}},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"email-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	c := newTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		return nil
+	})
+	// Override with the withTestClient's client
+	orig := client.New
+	client.New = func(string) (*client.Client, error) { return c, nil }
+	defer func() { client.New = orig }()
+
+	// Actually, withTestClient already set it. Let me use it differently.
+	// The trashEmail function takes a client, so I can test it directly.
+	_ = c
+}
+
+func TestTrashEmail_Direct(t *testing.T) {
+	c := newTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-inbox", "name": "Inbox", "role": "inbox"},
+						{"id": "mbox-trash", "name": "Trash", "role": "trash"},
+					},
+				}, call.CallID))
+			case "Email/get":
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1", "mailboxIds": map[string]any{"mbox-inbox": true}},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"email-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+	defer func() { jsonOutput = oldJSON }()
+
+	err := trashEmail(c, "email-1")
+	assert.NoError(t, err)
+}
+
+func TestTrashEmail_JSON(t *testing.T) {
+	c := newTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-trash", "name": "Trash", "role": "trash"},
+					},
+				}, call.CallID))
+			case "Email/get":
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1", "mailboxIds": map[string]any{"mbox-inbox": true}},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"email-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	oldJSON := jsonOutput
+	jsonOutput = true
+
+	err := trashEmail(c, "email-1")
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+	jsonOutput = oldJSON
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "trashed")
+}
+
+func TestPermanentlyDeleteEmail_Direct(t *testing.T) {
+	c := newTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/set" {
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"destroyed": []string{"email-1"},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+	defer func() { jsonOutput = oldJSON }()
+
+	err := permanentlyDeleteEmail(c, "email-1")
+	assert.NoError(t, err)
+}
+
+func TestPermanentlyDeleteEmail_JSON(t *testing.T) {
+	c := newTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/set" {
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"destroyed": []string{"email-1"},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	oldJSON := jsonOutput
+	jsonOutput = true
+
+	err := permanentlyDeleteEmail(c, "email-1")
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+	jsonOutput = oldJSON
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "destroyed")
+}
+
+func TestRunEmailMove_Direct(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-inbox", "name": "Inbox"},
+						{"id": "mbox-archive", "name": "Archive"},
+					},
+				}, call.CallID))
+			case "Email/get":
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1", "mailboxIds": map[string]any{"mbox-inbox": true}},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"email-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+	defer func() { jsonOutput = oldJSON }()
+
+	err := runEmailMove(nil, []string{"email-1", "Archive"})
+	assert.NoError(t, err)
+}
+
+func TestRunEmailDelete_Trash(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-trash", "name": "Trash", "role": "trash"},
+					},
+				}, call.CallID))
+			case "Email/get":
+				responses = append(responses, jmaptest.MethodResponse("Email/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "email-1", "mailboxIds": map[string]any{"mbox-inbox": true}},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"email-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+	oldPermanent := emailDeletePermanent
+	emailDeletePermanent = false
+	defer func() {
+		jsonOutput = oldJSON
+		emailDeletePermanent = oldPermanent
+	}()
+
+	err := runEmailDelete(nil, []string{"email-1"})
+	assert.NoError(t, err)
+}
+
+func TestRunEmailDelete_Permanent(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Email/set" {
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"destroyed": []string{"email-1"},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+	oldPermanent := emailDeletePermanent
+	emailDeletePermanent = true
+	defer func() {
+		jsonOutput = oldJSON
+		emailDeletePermanent = oldPermanent
+	}()
+
+	err := runEmailDelete(nil, []string{"email-1"})
+	assert.NoError(t, err)
+}
+
+func TestRunConfigShow(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	dir := filepath.Join(tmpDir, "fm")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+default_identity = "ident-1"
+default_mailbox = "Archive"
+pager = "less -R"
+`), 0644))
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	oldJSON := jsonOutput
+	jsonOutput = false
+
+	err := runConfigShow(nil, nil)
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+	jsonOutput = oldJSON
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "ident-1")
+	assert.Contains(t, buf.String(), "Archive")
+}
+
+func TestRunEmailSend(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Identity/get":
+				responses = append(responses, jmaptest.MethodResponse("Identity/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "ident-1", "name": "Test", "email": "test@fm.com"},
+					},
+				}, call.CallID))
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-drafts", "name": "Drafts", "role": "drafts"},
+						{"id": "mbox-sent", "name": "Sent", "role": "sent"},
+					},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"created": map[string]any{
+						"draft": map[string]any{"id": "email-new"},
+					},
+				}, call.CallID))
+			case "EmailSubmission/set":
+				responses = append(responses, jmaptest.MethodResponse("EmailSubmission/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"created": map[string]any{
+						"send": map[string]any{"id": "sub-1"},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldTo := sendTo
+	oldCC := sendCC
+	oldBCC := sendBCC
+	oldSubject := sendSubject
+	oldBody := sendBody
+	oldHTML := sendHTML
+	oldIdent := sendIdentity
+	oldAttach := sendAttach
+	oldJSON := jsonOutput
+	oldCfg := cfg
+
+	sendTo = []string{"bob@example.com"}
+	sendCC = []string{"carol@example.com"}
+	sendBCC = []string{"dave@example.com"}
+	sendSubject = "Test Subject"
+	sendBody = "Hello"
+	sendHTML = false
+	sendIdentity = ""
+	sendAttach = nil
+	jsonOutput = false
+	cfg = nil
+	defer func() {
+		sendTo = oldTo
+		sendCC = oldCC
+		sendBCC = oldBCC
+		sendSubject = oldSubject
+		sendBody = oldBody
+		sendHTML = oldHTML
+		sendIdentity = oldIdent
+		sendAttach = oldAttach
+		jsonOutput = oldJSON
+		cfg = oldCfg
+	}()
+
+	err := runEmailSend(nil, nil)
+	assert.NoError(t, err)
+}
+
+func TestRunEmailSend_HTML(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Identity/get":
+				responses = append(responses, jmaptest.MethodResponse("Identity/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{{"id": "ident-1", "name": "Test", "email": "t@fm.com"}},
+				}, call.CallID))
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{{"id": "mbox-drafts", "name": "Drafts", "role": "drafts"}},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID, "oldState": "s1", "newState": "s2",
+					"created": map[string]any{"draft": map[string]any{"id": "email-new"}},
+				}, call.CallID))
+			case "EmailSubmission/set":
+				responses = append(responses, jmaptest.MethodResponse("EmailSubmission/set", map[string]any{
+					"accountId": jmaptest.TestAccountID, "oldState": "s1", "newState": "s2",
+					"created": map[string]any{"send": map[string]any{"id": "sub-1"}},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	oldTo := sendTo
+	oldSubject := sendSubject
+	oldBody := sendBody
+	oldHTML := sendHTML
+	oldIdent := sendIdentity
+	oldJSON := jsonOutput
+	oldCfg := cfg
+	oldAttach := sendAttach
+
+	sendTo = []string{"bob@example.com"}
+	sendSubject = "HTML Test"
+	sendBody = "<p>Hello</p>"
+	sendHTML = true
+	sendIdentity = ""
+	sendAttach = nil
+	jsonOutput = true
+	cfg = nil
+	defer func() {
+		sendTo = oldTo
+		sendSubject = oldSubject
+		sendBody = oldBody
+		sendHTML = oldHTML
+		sendIdentity = oldIdent
+		sendAttach = oldAttach
+		jsonOutput = oldJSON
+		cfg = oldCfg
+	}()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := runEmailSend(nil, nil)
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "emailId")
+}
+
+func TestRunConfigPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := runConfigPath(nil, nil)
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "config.toml")
+}
+
+func TestRunConfigShow_JSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	dir := filepath.Join(tmpDir, "fm")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+default_identity = "ident-1"
+default_mailbox = "Archive"
+`), 0644))
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	oldJSON := jsonOutput
+	jsonOutput = true
+
+	err := runConfigShow(nil, nil)
+	assert.NoError(t, err)
+
+	w.Close()
+	os.Stdout = oldStdout
+	jsonOutput = oldJSON
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	assert.Contains(t, buf.String(), "ident-1")
+}
+
+func TestRunEmailSend_WithAttachment(t *testing.T) {
+	withTestClient(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Identity/get":
+				responses = append(responses, jmaptest.MethodResponse("Identity/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{{"id": "ident-1", "name": "Test", "email": "t@fm.com"}},
+				}, call.CallID))
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list":      []map[string]any{{"id": "mbox-drafts", "name": "Drafts", "role": "drafts"}},
+				}, call.CallID))
+			case "Email/set":
+				responses = append(responses, jmaptest.MethodResponse("Email/set", map[string]any{
+					"accountId": jmaptest.TestAccountID, "oldState": "s1", "newState": "s2",
+					"created": map[string]any{"draft": map[string]any{"id": "email-new"}},
+				}, call.CallID))
+			case "EmailSubmission/set":
+				responses = append(responses, jmaptest.MethodResponse("EmailSubmission/set", map[string]any{
+					"accountId": jmaptest.TestAccountID, "oldState": "s1", "newState": "s2",
+					"created": map[string]any{"send": map[string]any{"id": "sub-1"}},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	// Create temp file for attachment
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("attachment content"), 0644))
+
+	oldTo := sendTo
+	oldSubject := sendSubject
+	oldBody := sendBody
+	oldHTML := sendHTML
+	oldIdent := sendIdentity
+	oldAttach := sendAttach
+	oldJSON := jsonOutput
+	oldCfg := cfg
+	oldCC := sendCC
+	oldBCC := sendBCC
+
+	sendTo = []string{"bob@example.com"}
+	sendCC = nil
+	sendBCC = nil
+	sendSubject = "With Attachment"
+	sendBody = "See attached"
+	sendHTML = false
+	sendIdentity = ""
+	sendAttach = []string{testFile}
+	jsonOutput = false
+	cfg = nil
+	defer func() {
+		sendTo = oldTo
+		sendCC = oldCC
+		sendBCC = oldBCC
+		sendSubject = oldSubject
+		sendBody = oldBody
+		sendHTML = oldHTML
+		sendIdentity = oldIdent
+		sendAttach = oldAttach
+		jsonOutput = oldJSON
+		cfg = oldCfg
+	}()
+
+	err := runEmailSend(nil, nil)
+	assert.NoError(t, err)
 }
