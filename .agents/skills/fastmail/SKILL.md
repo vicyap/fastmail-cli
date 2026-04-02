@@ -1,13 +1,13 @@
 ---
-name: fastmail-cli
-description: Manage Fastmail email, mailboxes, masked emails, sieve filters, and vacation auto-reply using the fm CLI. Use when the user wants to interact with Fastmail, manage email, create masked email addresses, configure mail filters, or automate email workflows via the command line.
+name: fastmail
+description: Manage Fastmail email, mailboxes, masked emails, sieve filters, and vacation auto-reply. Use when the user wants to interact with Fastmail, manage email, create masked email addresses, configure mail filters, or automate email workflows.
 license: MIT
 allowed-tools: Bash(fm:*) Read
 ---
 
-# Fastmail CLI (fm)
+# Fastmail
 
-A CLI for Fastmail over the JMAP protocol. All commands support `--json` for machine-readable output.
+Manage Fastmail via the `fm` CLI, which talks to Fastmail's JMAP API. All commands support `--json` for machine-readable output.
 
 ## Prerequisites
 

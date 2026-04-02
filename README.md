@@ -255,12 +255,12 @@ This installs the skill into every detected agent's skill directory.
 
 ### Manual install
 
-Copy `.agents/skills/fastmail-cli/` into your agent's skill directory:
+Copy `.agents/skills/fastmail/` into your agent's skill directory:
 
 | Agent | Path |
 |---|---|
-| Claude Code | `.claude/skills/fastmail-cli/` |
-| Cursor, Codex, Copilot | `.agents/skills/fastmail-cli/` |
+| Claude Code | `.claude/skills/fastmail/` |
+| Cursor, Codex, Copilot | `.agents/skills/fastmail/` |
 
 ### What it does
 
