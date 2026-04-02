@@ -235,11 +235,36 @@ All settings are optional. Flags and env vars override config values.
 - [x] `fm describe` -- JSON command schema for AI agents
 - [x] Man pages generated via `cobra/doc` and shipped in release archives
 - [x] Homebrew tap auth via PAT token
+- [x] Agent Skill for Claude Code, Cursor, Codex (`.agents/skills/`)
+- [x] Integration tests against a real Fastmail account (22 tests)
 
 ### Future
-
-- [ ] Integration tests against a real Fastmail account
 - [ ] Contacts and calendars (pending Fastmail enabling JMAP for these)
+
+## Agent Skill
+
+This repo includes an [Agent Skill](https://agentskills.io) that teaches AI coding agents (Claude Code, Cursor, Codex, Copilot, etc.) how to use `fm`.
+
+### Install with npx (all agents)
+
+```bash
+npx skills add vicyap/fastmail-cli
+```
+
+This installs the skill into every detected agent's skill directory.
+
+### Manual install
+
+Copy `.agents/skills/fastmail-cli/` into your agent's skill directory:
+
+| Agent | Path |
+|---|---|
+| Claude Code | `.claude/skills/fastmail-cli/` |
+| Cursor, Codex, Copilot | `.agents/skills/fastmail-cli/` |
+
+### What it does
+
+The skill gives agents full context on every `fm` command, JSON output patterns, gotchas, and JMAP protocol details -- so you can just say "search my Fastmail for messages from Alice" and the agent knows how to use `fm` correctly.
 
 ## How it works
 
