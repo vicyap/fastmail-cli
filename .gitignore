@@ -2,3 +2,4 @@ fm
 dist/
 completions/
 man/
+.env
