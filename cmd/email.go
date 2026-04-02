@@ -100,7 +100,12 @@ func runEmailList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	mailboxID, err := findMailboxByName(c, emailMailbox)
+	mbox := emailMailbox
+	if !cmd.Flags().Changed("mailbox") && cfg != nil {
+		mbox = cfg.DefaultMailboxOrInbox()
+	}
+
+	mailboxID, err := findMailboxByName(c, mbox)
 	if err != nil {
 		return err
 	}
@@ -294,7 +299,7 @@ func printEmails(emails []*email.Email) error {
 		}
 		date := ""
 		if e.ReceivedAt != nil {
-			date = e.ReceivedAt.Format("2006-01-02 15:04")
+			date = output.RelativeTime(*e.ReceivedAt)
 		}
 		tbl.Row(string(e.ID), from, e.Subject, date)
 	}
@@ -323,7 +328,7 @@ func printSearchResults(emails []*email.Email, snippets []*searchsnippet.SearchS
 		}
 		date := ""
 		if e.ReceivedAt != nil {
-			date = e.ReceivedAt.Format("2006-01-02 15:04")
+			date = output.RelativeTime(*e.ReceivedAt)
 		}
 		snippet := ""
 		if s, ok := snippetMap[e.ID]; ok && s.Preview != "" {

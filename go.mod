@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	git.sr.ht/~rockorager/go-jmap v0.5.3
+	github.com/BurntSushi/toml v1.6.0
 	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

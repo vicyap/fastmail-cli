@@ -49,7 +49,17 @@ fm auth logout         # Remove stored token
 ### Mailboxes
 
 ```bash
-fm mailbox list        # List all mailboxes with unread/total counts
+fm mailbox list                     # List all mailboxes with unread/total counts
+fm mailbox create "Projects"        # Create a new mailbox
+fm mailbox rename "Projects" "Work" # Rename a mailbox
+fm mailbox delete "Work"            # Delete a mailbox
+fm mailbox delete "Work" --force    # Delete mailbox and all emails in it
+```
+
+### Identities
+
+```bash
+fm identity list       # List sending identities
 ```
 
 ### Email
@@ -77,6 +87,11 @@ fm email send --to=bob@example.com --subject="Hello" --body="Hi Bob"
 fm email send --to=bob@example.com --subject="Hello" < body.txt
 fm email send --to=alice@example.com --cc=carol@example.com --subject="Update"
 fm email send --to=bob@example.com --subject="Report" --attach=report.pdf --attach=data.csv
+fm email send --to=bob@example.com --subject="Newsletter" --html --body="<h1>Hi</h1>"
+
+# Flag/unflag
+fm email flag <id>
+fm email unflag <id>
 
 # Move and delete
 fm email move <id> Archive
@@ -140,6 +155,19 @@ fm completion fish | source
 
 Completion scripts are also included in release archives under `completions/`.
 
+### Configuration
+
+Create `~/.config/fm/config.toml`:
+
+```toml
+default_identity = "ident-2"   # Default sending identity
+default_mailbox = "Archive"     # Default mailbox for fm email list
+pager = "less -R"               # Pager for email read/thread
+color = true                    # Enable/disable color output
+```
+
+All settings are optional. Flags and env vars override config values.
+
 ## Roadmap
 
 ### v0.1 -- Core email and masked email
@@ -177,6 +205,12 @@ Completion scripts are also included in release archives under `completions/`.
 - [x] Attachment upload on `fm email send --attach`
 - [x] Color output for headers and table headings
 - [x] Pager support for `fm email read` and `fm email thread`
+- [x] `fm email send --html` for HTML body
+- [x] `fm mailbox create` / `rename` / `delete`
+- [x] `fm email flag` / `unflag`
+- [x] `fm identity list`
+- [x] Config file (`~/.config/fm/config.toml`)
+- [x] Relative dates in email list output
 
 ### Future
 

@@ -169,3 +169,133 @@ func TestPrintMailboxes_JSON(t *testing.T) {
 	assert.Equal(t, "Inbox", decoded[0]["name"])
 	assert.Equal(t, "inbox", decoded[0]["role"])
 }
+
+func TestMailboxCreate(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Mailbox/set" {
+				create := call.Args["create"].(map[string]any)
+				new1 := create["new1"].(map[string]any)
+				assert.Equal(t, "Projects", new1["name"])
+
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"created": map[string]any{
+						"new1": map[string]any{
+							"id":   "mbox-new",
+							"name": "Projects",
+						},
+					},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+
+	accountID := jmapClient.Session.PrimaryAccounts["urn:ietf:params:jmap:mail"]
+	req := &jmap.Request{}
+	req.Invoke(&mailbox.Set{
+		Account: accountID,
+		Create: map[jmap.ID]*mailbox.Mailbox{
+			"new1": {Name: "Projects"},
+		},
+	})
+
+	resp, err := jmapClient.Do(req)
+	require.NoError(t, err)
+
+	r := resp.Responses[0].Args.(*mailbox.SetResponse)
+	require.Contains(t, r.Created, jmap.ID("new1"))
+	assert.Equal(t, "Projects", r.Created["new1"].Name)
+}
+
+func TestMailboxRename(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			switch call.Name {
+			case "Mailbox/get":
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/get", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"state":     "s1",
+					"list": []map[string]any{
+						{"id": "mbox-1", "name": "OldName"},
+					},
+				}, call.CallID))
+			case "Mailbox/set":
+				update := call.Args["update"].(map[string]any)
+				patch := update["mbox-1"].(map[string]any)
+				assert.Equal(t, "NewName", patch["name"])
+
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"updated":   map[string]any{"mbox-1": nil},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	c := &client.Client{JMAP: &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}}
+	require.NoError(t, c.JMAP.Authenticate())
+
+	// Find mailbox
+	id, err := findMailboxByName(c, "OldName")
+	require.NoError(t, err)
+	assert.Equal(t, jmap.ID("mbox-1"), id)
+}
+
+func TestMailboxDelete(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		calls := jmaptest.ParseCalls(t, req)
+		var responses []jmaptest.RawInvocation
+		for _, call := range calls {
+			if call.Name == "Mailbox/set" {
+				destroy := call.Args["destroy"].([]any)
+				assert.Equal(t, "mbox-1", destroy[0])
+
+				responses = append(responses, jmaptest.MethodResponse("Mailbox/set", map[string]any{
+					"accountId": jmaptest.TestAccountID,
+					"oldState":  "s1",
+					"newState":  "s2",
+					"destroyed": []string{"mbox-1"},
+				}, call.CallID))
+			}
+		}
+		return responses
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+
+	req := &jmap.Request{}
+	req.Invoke(&mailbox.Set{
+		Account: jmapClient.Session.PrimaryAccounts["urn:ietf:params:jmap:mail"],
+		Destroy: []jmap.ID{"mbox-1"},
+	})
+
+	resp, err := jmapClient.Do(req)
+	require.NoError(t, err)
+
+	r := resp.Responses[0].Args.(*mailbox.SetResponse)
+	assert.Contains(t, r.Destroyed, jmap.ID("mbox-1"))
+}

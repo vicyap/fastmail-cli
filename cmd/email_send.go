@@ -25,6 +25,7 @@ var (
 	sendBCC      []string
 	sendSubject  string
 	sendBody     string
+	sendHTML     bool
 	sendIdentity string
 	sendAttach   []string
 )
@@ -57,7 +58,8 @@ func init() {
 	emailSendCmd.Flags().StringSliceVar(&sendCC, "cc", nil, "CC recipient (repeatable)")
 	emailSendCmd.Flags().StringSliceVar(&sendBCC, "bcc", nil, "BCC recipient (repeatable)")
 	emailSendCmd.Flags().StringVar(&sendSubject, "subject", "", "Subject line (required)")
-	emailSendCmd.Flags().StringVar(&sendBody, "body", "", "Plain text body (reads stdin if omitted)")
+	emailSendCmd.Flags().StringVar(&sendBody, "body", "", "Body text (reads stdin if omitted)")
+	emailSendCmd.Flags().BoolVar(&sendHTML, "html", false, "Send body as HTML instead of plain text")
 	emailSendCmd.Flags().StringVar(&sendIdentity, "identity", "", "Sending identity ID (default: primary)")
 	emailSendCmd.Flags().StringSliceVar(&sendAttach, "attach", nil, "File to attach (repeatable)")
 	emailSendCmd.MarkFlagRequired("to")
@@ -87,8 +89,12 @@ func runEmailSend(cmd *cobra.Command, args []string) error {
 		body = string(data)
 	}
 
-	// Get sending identity
-	identityID, err := resolveIdentity(c, sendIdentity)
+	// Get sending identity (flag > config > first available)
+	identFlag := sendIdentity
+	if identFlag == "" && cfg != nil {
+		identFlag = cfg.DefaultIdentity
+	}
+	identityID, err := resolveIdentity(c, identFlag)
 	if err != nil {
 		return err
 	}
@@ -135,10 +141,17 @@ func runEmailSend(cmd *cobra.Command, args []string) error {
 		BodyValues: map[string]*email.BodyValue{
 			"body": {Value: body},
 		},
-		TextBody: []*email.BodyPart{
-			{PartID: "body", Type: "text/plain"},
-		},
 		Attachments: attachments,
+	}
+
+	if sendHTML {
+		newEmail.HTMLBody = []*email.BodyPart{
+			{PartID: "body", Type: "text/html"},
+		}
+	} else {
+		newEmail.TextBody = []*email.BodyPart{
+			{PartID: "body", Type: "text/plain"},
+		}
 	}
 
 	req := &jmap.Request{}
