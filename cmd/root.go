@@ -48,9 +48,8 @@ var rootCmd = &cobra.Command{
 }
 
 var describeCmd = &cobra.Command{
-	Use:    "describe",
-	Short:  "Output command tree as JSON (for AI agents)",
-	Hidden: true,
+	Use:   "describe",
+	Short: "Output command tree as JSON (for AI agents)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		schema := buildCommandSchema(rootCmd, true)
 		enc := json.NewEncoder(os.Stdout)
