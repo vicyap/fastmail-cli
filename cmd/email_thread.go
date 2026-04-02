@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"git.sr.ht/~rockorager/go-jmap"
 	"git.sr.ht/~rockorager/go-jmap/mail/email"
 	"git.sr.ht/~rockorager/go-jmap/mail/thread"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/vicyap/fastmail-cli/internal/client"
 	"github.com/vicyap/fastmail-cli/internal/output"
@@ -50,7 +52,12 @@ func runEmailThread(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return printThread(emails)
+	if jsonOutput {
+		return output.PrintJSON(emails)
+	}
+	return output.Pager(func(w io.Writer) error {
+		return writeThread(w, emails)
+	})
 }
 
 func getThreadID(c *client.Client, emailID jmap.ID) (jmap.ID, error) {
@@ -134,45 +141,43 @@ func getEmailsByIDs(c *client.Client, ids []jmap.ID) ([]*email.Email, error) {
 	return nil, fmt.Errorf("unexpected response")
 }
 
-func printThread(emails []*email.Email) error {
-	if jsonOutput {
-		return output.PrintJSON(emails)
-	}
+var threadSeparator = color.New(color.FgHiBlack)
 
+func writeThread(w io.Writer, emails []*email.Email) error {
 	for i, e := range emails {
 		if i > 0 {
-			fmt.Println(strings.Repeat("─", 72))
+			fmt.Fprintln(w, threadSeparator.Sprint(strings.Repeat("─", 72)))
 		}
 
-		fmt.Printf("From:    %s\n", formatAddresses(e.From))
-		fmt.Printf("To:      %s\n", formatAddresses(e.To))
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("From:   "), formatAddresses(e.From))
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("To:     "), formatAddresses(e.To))
 		if len(e.CC) > 0 {
-			fmt.Printf("CC:      %s\n", formatAddresses(e.CC))
+			fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("CC:     "), formatAddresses(e.CC))
 		}
-		fmt.Printf("Subject: %s\n", e.Subject)
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("Subject:"), e.Subject)
 		if e.ReceivedAt != nil {
-			fmt.Printf("Date:    %s\n", e.ReceivedAt.Format("2006-01-02 15:04:05"))
+			fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("Date:   "), e.ReceivedAt.Format("2006-01-02 15:04:05"))
 		}
-		fmt.Printf("ID:      %s\n", e.ID)
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("ID:     "), e.ID)
 
 		if len(e.Attachments) > 0 {
-			fmt.Printf("Attachments:\n")
+			fmt.Fprintf(w, "%s\n", headerLabel.Sprint("Attachments:"))
 			for _, att := range e.Attachments {
 				name := att.Name
 				if name == "" {
 					name = "(unnamed)"
 				}
-				fmt.Printf("  - %s (%s, %d bytes)\n", name, att.Type, att.Size)
+				fmt.Fprintf(w, "  - %s (%s, %d bytes)\n", name, att.Type, att.Size)
 			}
 		}
 
-		fmt.Println()
+		fmt.Fprintln(w)
 
 		for _, part := range e.TextBody {
 			if bv, ok := e.BodyValues[part.PartID]; ok {
-				fmt.Print(bv.Value)
+				fmt.Fprint(w, bv.Value)
 				if !strings.HasSuffix(bv.Value, "\n") {
-					fmt.Println()
+					fmt.Fprintln(w)
 				}
 			}
 		}

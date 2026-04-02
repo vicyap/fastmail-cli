@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"git.sr.ht/~rockorager/go-jmap"
@@ -393,4 +395,70 @@ func TestResolveIdentity_Specific(t *testing.T) {
 	id, err := resolveIdentity(c, "ident-2")
 	require.NoError(t, err)
 	assert.Equal(t, jmap.ID("ident-2"), id)
+}
+
+func TestUploadAttachment(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		return nil
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+	c := &client.Client{JMAP: jmapClient}
+
+	// Create a temp file
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "document.pdf")
+	require.NoError(t, os.WriteFile(testFile, []byte("fake pdf content"), 0644))
+
+	att, err := uploadAttachment(c, jmap.ID(jmaptest.TestAccountID), testFile)
+	require.NoError(t, err)
+
+	assert.Equal(t, jmap.ID("blob-upload-1"), att.BlobID)
+	assert.Equal(t, "document.pdf", att.Name)
+	assert.Equal(t, "application/pdf", att.Type)
+	assert.Equal(t, "attachment", att.Disposition)
+}
+
+func TestUploadAttachment_UnknownType(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		return nil
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+	c := &client.Client{JMAP: jmapClient}
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "data.xyz")
+	require.NoError(t, os.WriteFile(testFile, []byte("unknown data"), 0644))
+
+	att, err := uploadAttachment(c, jmap.ID(jmaptest.TestAccountID), testFile)
+	require.NoError(t, err)
+
+	assert.Equal(t, "application/octet-stream", att.Type)
+	assert.Equal(t, "data.xyz", att.Name)
+}
+
+func TestUploadAttachment_FileNotFound(t *testing.T) {
+	server := jmaptest.NewServer(t, func(t *testing.T, req *jmaptest.RawRequest) []jmaptest.RawInvocation {
+		return nil
+	})
+
+	jmapClient := &jmap.Client{
+		SessionEndpoint: server.URL + "/session",
+		HttpClient:      http.DefaultClient,
+	}
+	require.NoError(t, jmapClient.Authenticate())
+	c := &client.Client{JMAP: jmapClient}
+
+	_, err := uploadAttachment(c, jmap.ID(jmaptest.TestAccountID), "/nonexistent/file.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to open attachment")
 }

@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"mime"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"git.sr.ht/~rockorager/go-jmap"
@@ -24,6 +26,7 @@ var (
 	sendSubject  string
 	sendBody     string
 	sendIdentity string
+	sendAttach   []string
 )
 
 var emailSendCmd = &cobra.Command{
@@ -56,6 +59,7 @@ func init() {
 	emailSendCmd.Flags().StringVar(&sendSubject, "subject", "", "Subject line (required)")
 	emailSendCmd.Flags().StringVar(&sendBody, "body", "", "Plain text body (reads stdin if omitted)")
 	emailSendCmd.Flags().StringVar(&sendIdentity, "identity", "", "Sending identity ID (default: primary)")
+	emailSendCmd.Flags().StringSliceVar(&sendAttach, "attach", nil, "File to attach (repeatable)")
 	emailSendCmd.MarkFlagRequired("to")
 	emailSendCmd.MarkFlagRequired("subject")
 
@@ -111,6 +115,16 @@ func runEmailSend(cmd *cobra.Command, args []string) error {
 		bccAddrs = append(bccAddrs, parseAddress(addr))
 	}
 
+	// Upload attachments
+	var attachments []*email.BodyPart
+	for _, filePath := range sendAttach {
+		att, err := uploadAttachment(c, accountID, filePath)
+		if err != nil {
+			return err
+		}
+		attachments = append(attachments, att)
+	}
+
 	newEmail := &email.Email{
 		MailboxIDs: map[jmap.ID]bool{draftsID: true},
 		To:         toAddrs,
@@ -124,6 +138,7 @@ func runEmailSend(cmd *cobra.Command, args []string) error {
 		TextBody: []*email.BodyPart{
 			{PartID: "body", Type: "text/plain"},
 		},
+		Attachments: attachments,
 	}
 
 	req := &jmap.Request{}
@@ -441,6 +456,33 @@ func parseAddress(addr string) *mail.Address {
 		return &mail.Address{Name: name, Email: emailAddr}
 	}
 	return &mail.Address{Email: addr}
+}
+
+func uploadAttachment(c *client.Client, accountID jmap.ID, filePath string) (*email.BodyPart, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open attachment %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	uploadResp, err := c.JMAP.Upload(accountID, file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload attachment %s: %w", filePath, err)
+	}
+
+	name := filepath.Base(filePath)
+	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	return &email.BodyPart{
+		BlobID:      uploadResp.ID,
+		Type:        mimeType,
+		Name:        name,
+		Disposition: "attachment",
+		Size:        uploadResp.Size,
+	}, nil
 }
 
 func formatEmailSetError(e *jmap.SetError) string {

@@ -4,11 +4,23 @@ A command-line interface for [Fastmail](https://www.fastmail.com) built in Go, u
 
 ## Install
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install vicyap/tap/fm
+```
+
+### Go
+
 ```bash
 go install github.com/vicyap/fastmail-cli@latest
 ```
 
-Or build from source:
+### Binary
+
+Download from [Releases](https://github.com/vicyap/fastmail-cli/releases) for your platform.
+
+### Build from source
 
 ```bash
 git clone https://github.com/vicyap/fastmail-cli.git
@@ -64,6 +76,7 @@ fm email thread <id>
 fm email send --to=bob@example.com --subject="Hello" --body="Hi Bob"
 fm email send --to=bob@example.com --subject="Hello" < body.txt
 fm email send --to=alice@example.com --cc=carol@example.com --subject="Update"
+fm email send --to=bob@example.com --subject="Report" --attach=report.pdf --attach=data.csv
 
 # Move and delete
 fm email move <id> Archive
@@ -112,6 +125,21 @@ fm vacation disable                                     # Disable
 
 All commands support `--json` for machine-readable output.
 
+### Shell Completions
+
+```bash
+# Bash (add to ~/.bashrc)
+eval "$(fm completion bash)"
+
+# Zsh (add to ~/.zshrc)
+eval "$(fm completion zsh)"
+
+# Fish
+fm completion fish | source
+```
+
+Completion scripts are also included in release archives under `completions/`.
+
 ## Roadmap
 
 ### v0.1 -- Core email and masked email
@@ -141,13 +169,19 @@ All commands support `--json` for machine-readable output.
 - [x] `fm sieve list` / `get` / `set` / `activate` / `deactivate` / `delete` / `validate`
 - [x] `fm vacation get` / `set` / `disable`
 
+### v0.5 -- Polish
+
+- [x] `fm --version` with build-time version injection
+- [x] Shell completions (bash, zsh, fish) shipped in release archives
+- [x] Homebrew tap (`brew install vicyap/tap/fm`)
+- [x] Attachment upload on `fm email send --attach`
+- [x] Color output for headers and table headings
+- [x] Pager support for `fm email read` and `fm email thread`
+
 ### Future
 
 - [ ] Integration tests against a real Fastmail account
-- [ ] Attachment upload on `fm email send`
 - [ ] Contacts and calendars (pending Fastmail enabling JMAP for these)
-- [ ] Shell completions (bash, zsh, fish)
-- [ ] Homebrew tap
 
 ## How it works
 

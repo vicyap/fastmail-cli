@@ -5,14 +5,18 @@ import (
 )
 
 var (
+	// Version is set at build time via ldflags.
+	Version = "dev"
+
 	jsonOutput bool
 	tokenFlag  string
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "fm",
-	Short: "A command-line interface for Fastmail",
-	Long:  "fm is a CLI for Fastmail built on the JMAP protocol.",
+	Use:     "fm",
+	Short:   "A command-line interface for Fastmail",
+	Long:    "fm is a CLI for Fastmail built on the JMAP protocol.",
+	Version: Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }

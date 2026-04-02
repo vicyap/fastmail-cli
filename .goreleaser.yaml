@@ -2,11 +2,19 @@ version: 2
 
 project_name: fm
 
+before:
+  hooks:
+    - go test ./...
+    - mkdir -p completions
+    - sh -c "go run . completion bash > completions/fm.bash"
+    - sh -c "go run . completion zsh > completions/fm.zsh"
+    - sh -c "go run . completion fish > completions/fm.fish"
+
 builds:
   - main: .
     binary: fm
     ldflags:
-      - -s -w
+      - -s -w -X github.com/vicyap/fastmail-cli/cmd.Version={{.Version}}
     goos:
       - linux
       - darwin
@@ -19,10 +27,29 @@ archives:
   - format_overrides:
       - goos: windows
         formats: [zip]
+    files:
+      - completions/*
+      - README.md
+      - LICENSE
 
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+
+homebrew_casks:
+  - repository:
+      owner: vicyap
+      name: homebrew-tap
+    homepage: https://github.com/vicyap/fastmail-cli
+    description: A command-line interface for Fastmail
+    url:
+      verified: github.com/vicyap/fastmail-cli
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/fm"]
+          end
 
 changelog:
   sort: asc

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -9,10 +10,11 @@ import (
 	"git.sr.ht/~rockorager/go-jmap"
 	"git.sr.ht/~rockorager/go-jmap/mail"
 	"git.sr.ht/~rockorager/go-jmap/mail/email"
-	"github.com/vicyap/fastmail-cli/internal/searchsnippet"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/vicyap/fastmail-cli/internal/client"
 	"github.com/vicyap/fastmail-cli/internal/output"
+	"github.com/vicyap/fastmail-cli/internal/searchsnippet"
 )
 
 var (
@@ -266,7 +268,12 @@ func runEmailRead(cmd *cobra.Command, args []string) error {
 			if len(r.List) == 0 {
 				return fmt.Errorf("email not found: %s", args[0])
 			}
-			return printEmailFull(r.List[0])
+			if jsonOutput {
+				return output.PrintJSON(r.List[0])
+			}
+			return output.Pager(func(w io.Writer) error {
+				return writeEmailFull(w, r.List[0])
+			})
 		}
 	}
 
@@ -327,54 +334,49 @@ func printSearchResults(emails []*email.Email, snippets []*searchsnippet.SearchS
 	return tbl.Flush()
 }
 
-func printEmailFull(e *email.Email) error {
-	if jsonOutput {
-		return output.PrintJSON(e)
-	}
+var headerLabel = color.New(color.FgCyan, color.Bold)
 
-	// Print headers
+func writeEmailFull(w io.Writer, e *email.Email) error {
 	if emailShowHeaders {
 		for _, h := range e.Headers {
-			fmt.Printf("%s: %s\n", h.Name, h.Value)
+			fmt.Fprintf(w, "%s: %s\n", headerLabel.Sprint(h.Name), h.Value)
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	} else {
-		fmt.Printf("From:    %s\n", formatAddresses(e.From))
-		fmt.Printf("To:      %s\n", formatAddresses(e.To))
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("From:   "), formatAddresses(e.From))
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("To:     "), formatAddresses(e.To))
 		if len(e.CC) > 0 {
-			fmt.Printf("CC:      %s\n", formatAddresses(e.CC))
+			fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("CC:     "), formatAddresses(e.CC))
 		}
-		fmt.Printf("Subject: %s\n", e.Subject)
+		fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("Subject:"), e.Subject)
 		if e.ReceivedAt != nil {
-			fmt.Printf("Date:    %s\n", e.ReceivedAt.Format(time.RFC1123))
+			fmt.Fprintf(w, "%s %s\n", headerLabel.Sprint("Date:   "), e.ReceivedAt.Format(time.RFC1123))
 		}
 
-		// Show attachment list
 		if len(e.Attachments) > 0 {
-			fmt.Printf("Attachments:\n")
+			fmt.Fprintf(w, "%s\n", headerLabel.Sprint("Attachments:"))
 			for _, att := range e.Attachments {
 				name := att.Name
 				if name == "" {
 					name = "(unnamed)"
 				}
-				fmt.Printf("  - %s (%s, %d bytes, blob:%s)\n", name, att.Type, att.Size, att.BlobID)
+				fmt.Fprintf(w, "  - %s (%s, %d bytes, blob:%s)\n", name, att.Type, att.Size, att.BlobID)
 			}
 		}
 
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 
-	// Print body
 	if emailShowHTML {
 		for _, part := range e.HTMLBody {
 			if bv, ok := e.BodyValues[part.PartID]; ok {
-				fmt.Print(bv.Value)
+				fmt.Fprint(w, bv.Value)
 			}
 		}
 	} else {
 		for _, part := range e.TextBody {
 			if bv, ok := e.BodyValues[part.PartID]; ok {
-				fmt.Print(bv.Value)
+				fmt.Fprint(w, bv.Value)
 			}
 		}
 	}
