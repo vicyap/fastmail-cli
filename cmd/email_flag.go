@@ -25,9 +25,25 @@ var emailUnflagCmd = &cobra.Command{
 	RunE:  runEmailUnflag,
 }
 
+var emailMarkReadCmd = &cobra.Command{
+	Use:   "mark-read <id>",
+	Short: "Mark an email as read",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runEmailMarkRead,
+}
+
+var emailMarkUnreadCmd = &cobra.Command{
+	Use:   "mark-unread <id>",
+	Short: "Mark an email as unread",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runEmailMarkUnread,
+}
+
 func init() {
 	emailCmd.AddCommand(emailFlagCmd)
 	emailCmd.AddCommand(emailUnflagCmd)
+	emailCmd.AddCommand(emailMarkReadCmd)
+	emailCmd.AddCommand(emailMarkUnreadCmd)
 }
 
 func runEmailFlag(cmd *cobra.Command, args []string) error {
@@ -36,6 +52,14 @@ func runEmailFlag(cmd *cobra.Command, args []string) error {
 
 func runEmailUnflag(cmd *cobra.Command, args []string) error {
 	return setEmailKeyword(args[0], "$flagged", nil)
+}
+
+func runEmailMarkRead(cmd *cobra.Command, args []string) error {
+	return setEmailKeyword(args[0], "$seen", true)
+}
+
+func runEmailMarkUnread(cmd *cobra.Command, args []string) error {
+	return setEmailKeyword(args[0], "$seen", nil)
 }
 
 func setEmailKeyword(id string, keyword string, value any) error {

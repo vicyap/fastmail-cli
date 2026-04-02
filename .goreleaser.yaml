@@ -9,6 +9,7 @@ before:
     - sh -c "go run . completion bash > completions/fm.bash"
     - sh -c "go run . completion zsh > completions/fm.zsh"
     - sh -c "go run . completion fish > completions/fm.fish"
+    - go run ./cmd/gendocs man man/
 
 builds:
   - main: .
@@ -29,6 +30,7 @@ archives:
         formats: [zip]
     files:
       - completions/*
+      - man/*
       - README.md
       - LICENSE
 
@@ -40,6 +42,7 @@ homebrew_casks:
   - repository:
       owner: vicyap
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/vicyap/fastmail-cli
     description: A command-line interface for Fastmail
     url:

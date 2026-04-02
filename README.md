@@ -89,9 +89,16 @@ fm email send --to=alice@example.com --cc=carol@example.com --subject="Update"
 fm email send --to=bob@example.com --subject="Report" --attach=report.pdf --attach=data.csv
 fm email send --to=bob@example.com --subject="Newsletter" --html --body="<h1>Hi</h1>"
 
-# Flag/unflag
+# Reply and forward
+fm email reply <id> --body="Thanks!"
+fm email reply <id> --all                  # Reply all
+fm email forward <id> --to=carol@example.com
+
+# Flag/unflag and read status
 fm email flag <id>
 fm email unflag <id>
+fm email mark-read <id>
+fm email mark-unread <id>
 
 # Move and delete
 fm email move <id> Archive
@@ -139,6 +146,14 @@ fm vacation disable                                     # Disable
 ```
 
 All commands support `--json` for machine-readable output.
+
+### Configuration
+
+```bash
+fm config init    # Create default config file
+fm config show    # Show current configuration
+fm config path    # Print config file path
+```
 
 ### Shell Completions
 
@@ -211,6 +226,15 @@ All settings are optional. Flags and env vars override config values.
 - [x] `fm identity list`
 - [x] Config file (`~/.config/fm/config.toml`)
 - [x] Relative dates in email list output
+
+### v0.6 -- Reply, forward, and agent support
+
+- [x] `fm email reply` / `fm email forward`
+- [x] `fm email mark-read` / `fm email mark-unread`
+- [x] `fm config init` / `fm config show` / `fm config path`
+- [x] `fm describe` -- JSON command schema for AI agents
+- [x] Man pages generated via `cobra/doc` and shipped in release archives
+- [x] Homebrew tap auth via PAT token
 
 ### Future
 
